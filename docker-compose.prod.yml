@@ -1,0 +1,309 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: dwtip-postgres
+    environment:
+      POSTGRES_USER: dwtip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dwtip_secure_password}
+      POSTGRES_DB: dwtip
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dwtip -d dwtip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  mongodb:
+    image: mongo:6
+    container_name: dwtip-mongodb
+    environment:
+      MONGO_INITDB_DATABASE: dwtip
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    container_name: dwtip-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: dwtip-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://dwtip:${POSTGRES_PASSWORD:-dwtip_secure_password}@dwtip-postgres:5432/dwtip
+      - MONGODB_URL=mongodb://dwtip-mongodb:27017/dwtip
+      - REDIS_URL=redis://dwtip-redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEEPDARKCTI_PATH=/app/deepdarkCTI
+      - DWTIP_ROOT=/app
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./deepdarkCTI:/app/deepdarkCTI:ro
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: dwtip-celery-worker
+    command: celery -A workers.tasks worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_URL=postgresql://dwtip:${POSTGRES_PASSWORD:-dwtip_secure_password}@dwtip-postgres:5432/dwtip
+      - MONGODB_URL=mongodb://dwtip-mongodb:27017/dwtip
+      - REDIS_URL=redis://dwtip-redis:6379/0
+      - CELERY_BROKER_URL=redis://dwtip-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://dwtip-redis:6379/1
+      - TOR_PROXY=socks5://dwtip-tor:9050
+      - TOR_CONTROL=dwtip-tor:9051
+      - TOR_PASSWORD=${TOR_PASSWORD:-}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./deepdarkCTI:/app/deepdarkCTI:ro
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A workers.tasks inspect ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: dwtip-celery-beat
+    command: celery -A workers.tasks beat --loglevel=info --scheduler redbeat.RedBeatScheduler
+    environment:
+      - DATABASE_URL=postgresql://dwtip:${POSTGRES_PASSWORD:-dwtip_secure_password}@dwtip-postgres:5432/dwtip
+      - REDIS_URL=redis://dwtip-redis:6379/0
+      - CELERY_BROKER_URL=redis://dwtip-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://dwtip-redis:6379/1
+      - ENVIRONMENT=production
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./backend:/app/backend:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep '[c]elery beat' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  scraper:
+    build:
+      context: ./scripts
+      dockerfile: ../backend/Dockerfile.scraper
+    container_name: dwtip-scraper
+    command: python advanced_scraper.py 100 --workers 4
+    environment:
+      - API_URL=http://dwtip-backend:8000
+      - DATABASE_URL=postgresql://dwtip:${POSTGRES_PASSWORD:-dwtip_secure_password}@dwtip-postgres:5432/dwtip
+      - TOR_PROXY=socks5://dwtip-tor:9050
+      - TOR_CONTROL_PORT=9051
+      - TOR_PASSWORD=${TOR_PASSWORD:-}
+      - SCRAPER_USERNAME=${SCRAPER_USERNAME:-admin}
+      - SCRAPER_PASSWORD=${SCRAPER_PASSWORD:-admin123}
+      - MAX_WORKERS=4
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./scripts:/app:ro
+      - ./deepdarkCTI:/app/deepdarkCTI:ro
+      - scraper_logs:/app/logs
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dwtip-frontend
+    ports:
+      - "3000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dwtip-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dwtip-grafana
+    ports:
+      - "3030:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - dwtip-network
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
+  backend_logs:
+  scraper_logs:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  dwtip-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16

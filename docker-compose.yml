@@ -1,0 +1,165 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: dwtip-postgres
+    environment:
+      POSTGRES_USER: dwtip
+      POSTGRES_PASSWORD: dwtip_secure_password
+      POSTGRES_DB: dwtip
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dwtip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:6
+    container_name: dwtip-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: dwtip-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tor:
+    image: debian:bookworm-slim
+    container_name: dwtip-tor
+    command: bash -c "apt-get update && apt-get install -y --no-install-recommends tor && mkdir -p /etc/tor && echo 'SocksPort 0.0.0.0:9050' > /etc/tor/torrc && tor -f /etc/tor/torrc"
+    ports:
+      - "9050:9050"
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: dwtip-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://dwtip:dwtip_secure_password@postgres:5432/dwtip
+      - MONGODB_URL=mongodb://mongodb:27017/dwtip
+      - REDIS_URL=redis://redis:6379/0
+      - DEEPDARKCTI_PATH=/app/deepdarkCTI
+      - DWTIP_ROOT=/app
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - TOR_PROXY=socks5://tor:9050
+    volumes:
+      - ./backend:/app/backend
+      - ./deepdarkCTI:/app/deepdarkCTI
+      - ./scripts:/app/scripts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: dwtip-worker
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_URL=postgresql://dwtip:dwtip_secure_password@postgres:5432/dwtip
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - TOR_PROXY=socks5://tor:9050
+    volumes:
+      - ./backend:/app/backend
+      - ./deepdarkCTI:/app/deepdarkCTI
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: dwtip-beat
+    command: celery -A workers.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    environment:
+      - DATABASE_URL=postgresql://dwtip:dwtip_secure_password@postgres:5432/dwtip
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      - redis
+      - worker
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dwtip-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - dwtip-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  mongodb-data:
+  redis-data:
+
+networks:
+  dwtip-network:
+    driver: bridge
