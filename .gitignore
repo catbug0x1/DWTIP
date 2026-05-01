@@ -12,6 +12,7 @@ __pycache__/
 venv/
 env/
 backend_env/
+node_modules/
 backend.log
 dwtip.db
 docker-data/
