@@ -65,7 +65,7 @@ class Alert(Base):
     confidence = Column(Float, default=0.5)
 
     matched_keywords = Column(JSON, default=lambda: [])
-    meta_data = Column(JSON, default=lambda: {})
+    meta_data = Column("metadata", JSON, default=lambda: {})
 
     is_read = Column(Boolean, default=False, index=True)
     is_dismissed = Column(Boolean, default=False)

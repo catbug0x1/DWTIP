@@ -93,7 +93,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         ws.close()
       }
     }
-  }, [connect, ws])
+  }, [connect])
 
   const sendMessage = useCallback((message: string) => {
     if (ws && ws.readyState === WebSocket.OPEN) {

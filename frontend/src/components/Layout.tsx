@@ -17,18 +17,22 @@ import {
 } from '@heroicons/react/24/outline'
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: HomeIcon },
-  { name: 'Leaks', href: '/leaks', icon: ShieldExclamationIcon },
-  { name: 'Threat Actors', href: '/actors', icon: UserGroupIcon },
-  { name: 'IOCs', href: '/iocs', icon: CircleStackIcon },
-  { name: 'Sources', href: '/sources', icon: MegaphoneIcon },
-  { name: 'Alerts', href: '/alerts', icon: BellIcon },
+  { name: 'Dashboard', href: '/', icon: HomeIcon, roles: ['admin', 'analyst', 'viewer'] },
+  { name: 'Leaks', href: '/leaks', icon: ShieldExclamationIcon, roles: ['admin', 'analyst', 'viewer'] },
+  { name: 'Threat Actors', href: '/actors', icon: UserGroupIcon, roles: ['admin', 'analyst', 'viewer'] },
+  { name: 'IOCs', href: '/iocs', icon: CircleStackIcon, roles: ['admin', 'analyst', 'viewer'] },
+  { name: 'Sources', href: '/sources', icon: MegaphoneIcon, roles: ['admin', 'analyst'] },
+  { name: 'Alerts', href: '/alerts', icon: BellIcon, roles: ['admin', 'analyst', 'viewer'] },
 ]
 
 export default function Layout() {
   const { user, logout } = useAuth()
   const { isConnected } = useWebSocket()
   const location = useLocation()
+
+  const filteredNavigation = navigation.filter(item => 
+    user && item.roles.includes(user.role)
+  )
 
   const { data: alertsData } = useQuery({
     queryKey: ['alerts', 'unread'],
@@ -48,8 +52,10 @@ export default function Layout() {
           <h1 className="text-xl font-bold bg-gradient-to-r from-accent-primary to-accent-secondary bg-clip-text text-transparent">
             DWTIP
           </h1>
-          <span className="ml-2 text-xs text-gray-500">v1.0</span>
           <div className="ml-auto flex items-center gap-1">
+            <span className="mr-2 text-[10px] px-1.5 py-0.5 rounded border border-dark-500 text-gray-500 uppercase font-bold tracking-wider">
+              {user?.role}
+            </span>
             {isConnected ? (
               <WifiIcon className="w-4 h-4 text-green-400" title="Connected" />
             ) : (
@@ -59,7 +65,7 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 py-6 px-3 space-y-1 overflow-y-auto scrollbar">
-          {navigation.map((item) => {
+          {filteredNavigation.map((item) => {
             const isActive = location.pathname === item.href
             return (
               <Link
@@ -84,13 +90,15 @@ export default function Layout() {
         </nav>
 
         <div className="p-4 border-t border-dark-600">
-          <Link
-            to="/settings"
-            className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-dark-700 transition-all"
-          >
-            <Cog6ToothIcon className="w-5 h-5 mr-3" />
-            Settings
-          </Link>
+          {user?.role === 'admin' && (
+            <Link
+              to="/settings"
+              className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-dark-700 transition-all"
+            >
+              <Cog6ToothIcon className="w-5 h-5 mr-3" />
+              Settings
+            </Link>
+          )}
           
           <div className="mt-2 pt-2 border-t border-dark-600">
             <div className="px-3 py-2">

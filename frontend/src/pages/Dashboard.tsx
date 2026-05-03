@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import api from '../utils/api'
@@ -126,6 +127,7 @@ function SeverityBadge({ severity, count, total }: SeverityBadgeProps) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const { showToast } = useToast()
   const [scrapeStatus, setScrapeStatus] = useState<ScrapeStatus | null>(null)
   const [isScraping, setIsScraping] = useState(false)
@@ -230,18 +232,29 @@ export default function Dashboard() {
     <div className="min-h-screen bg-dark-900">
       {/* Header */}
       <header className="border-b border-dark-700 bg-dark-800/50 backdrop-blur-sm sticky top-0 z-50">
+        {user?.role !== 'admin' && (
+          <div className={`py-1 px-6 text-center text-[10px] font-bold uppercase tracking-widest ${
+            user?.role === 'analyst' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
+          }`}>
+            {user?.role} Panel - Restricted Access
+          </div>
+        )}
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600">
+                <div className={`p-2 rounded-xl bg-gradient-to-br ${
+                  user?.role === 'admin' ? 'from-indigo-500 to-purple-600' : 
+                  user?.role === 'analyst' ? 'from-purple-500 to-pink-600' : 'from-blue-500 to-cyan-600'
+                }`}>
                   <ShieldExclamationIcon className="w-6 h-6 text-white" />
                 </div>
-                Threat Intelligence
+                {user?.role === 'admin' ? 'Admin Intelligence' : 
+                 user?.role === 'analyst' ? 'Analyst Intelligence' : 'Security Monitor'}
               </h1>
               <p className="text-gray-400 text-sm mt-1 flex items-center gap-2">
                 <LockClosedIcon className="w-4 h-4 text-purple-400" />
-                Real-time dark web monitoring
+                {user?.role === 'viewer' ? 'Read-only security data' : 'Real-time dark web monitoring'}
                 <span className="text-gray-500">•</span>
                 <span className="text-xs">Last updated: {lastUpdated.toLocaleTimeString()}</span>
               </p>
@@ -258,22 +271,25 @@ export default function Dashboard() {
               >
                 <ArrowPathIcon className="w-5 h-5 text-gray-400" />
               </button>
-              {!isScraping ? (
-                <button
-                  onClick={handleStartScrape}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20"
-                >
-                  <PlayIcon className="w-5 h-5" />
-                  Start Scrape
-                </button>
-              ) : (
-                <button
-                  onClick={handleStopScrape}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl font-medium hover:bg-red-500/20 transition-colors"
-                >
-                  <StopIcon className="w-5 h-5" />
-                  Stop Scrape
-                </button>
+              
+              {user?.role === 'admin' && (
+                !isScraping ? (
+                  <button
+                    onClick={handleStartScrape}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/20"
+                  >
+                    <PlayIcon className="w-5 h-5" />
+                    Start Scrape
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStopScrape}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl font-medium hover:bg-red-500/20 transition-colors"
+                  >
+                    <StopIcon className="w-5 h-5" />
+                    Stop Scrape
+                  </button>
+                )
               )}
             </div>
           </div>
@@ -551,14 +567,16 @@ export default function Dashboard() {
             Quick Actions
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <button
-              onClick={handleStartScrape}
-              disabled={isScraping}
-              className="flex items-center justify-center gap-2 p-4 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 text-indigo-400 hover:border-indigo-500/50 hover:from-indigo-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <CpuChipIcon className="w-5 h-5" />
-              <span className="font-medium">{isScraping ? 'Scraping...' : 'Start Scrape'}</span>
-            </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={handleStartScrape}
+                disabled={isScraping}
+                className="flex items-center justify-center gap-2 p-4 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 text-indigo-400 hover:border-indigo-500/50 hover:from-indigo-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <CpuChipIcon className="w-5 h-5" />
+                <span className="font-medium">{isScraping ? 'Scraping...' : 'Start Scrape'}</span>
+              </button>
+            )}
             <button
               onClick={() => navigate('/leaks')}
               className="flex items-center justify-center gap-2 p-4 rounded-xl bg-dark-800/50 border border-dark-600 text-gray-300 hover:border-dark-500 hover:text-white transition-all"
