@@ -67,6 +67,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.api
     container_name: dwtip-backend
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
@@ -78,6 +79,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - TOR_PROXY=socks5://tor:9050
+      - PYTHONPATH=/app
     volumes:
       - ./backend:/app/backend
       - ./deepdarkCTI:/app/deepdarkCTI

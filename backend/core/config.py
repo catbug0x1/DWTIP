@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     cors_allow_methods: list = ["*"]
     cors_allow_headers: list = ["*"]
 
-    rate_limit_requests_per_minute: int = 60
+    rate_limit_requests_per_minute: int = 1000
     rate_limit_burst: int = 10
 
     celery_broker_url: str = ""

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode, useRef } from 'react'
 import { useToast } from '../components/Toast'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -27,24 +27,44 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
   const [ws, setWs] = useState<WebSocket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const { showToast } = useToast()
   const queryClient = useQueryClient()
 
   const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.CONNECTING || wsRef.current?.readyState === WebSocket.OPEN) {
+      return
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`
 
+    console.log('Connecting to WebSocket:', wsUrl)
     const socket = new WebSocket(wsUrl)
+    wsRef.current = socket
 
     socket.onopen = () => {
       setIsConnected(true)
       console.log('WebSocket connected')
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
     }
 
     socket.onclose = () => {
       setIsConnected(false)
+      wsRef.current = null
+      setWs(null)
       console.log('WebSocket disconnected')
-      setTimeout(connect, 5000)
+      
+      if (!reconnectTimeoutRef.current) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null
+          connect()
+        }, 5000)
+      }
     }
 
     socket.onerror = (error) => {
@@ -89,17 +109,20 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     connect()
 
     return () => {
-      if (ws) {
-        ws.close()
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
       }
     }
   }, [connect])
 
   const sendMessage = useCallback((message: string) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(message)
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(message)
     }
-  }, [ws])
+  }, [])
 
   return (
     <WebSocketContext.Provider value={{ isConnected, lastMessage, sendMessage }}>
