@@ -26,11 +26,20 @@ export function useWebSocket() {
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
-  const [ws, setWs] = useState<WebSocket | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastToastTimeRef = useRef<Record<string, number>>({})
   const { showToast } = useToast()
   const queryClient = useQueryClient()
+
+  const throttleToast = useCallback((message: string, type: string, key: string) => {
+    const now = Date.now()
+    const lastTime = lastToastTimeRef.current[key] || 0
+    if (now - lastTime > 5000) { // 5 seconds throttle
+      showToast(message, type as any)
+      lastToastTimeRef.current[key] = now
+    }
+  }, [showToast])
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.CONNECTING || wsRef.current?.readyState === WebSocket.OPEN) {
@@ -80,11 +89,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           case 'new_leak':
             queryClient.invalidateQueries({ queryKey: ['leaks'] })
             queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-            showToast(`New leak detected: ${message.data.title}`, 'info')
+            throttleToast(`New leak detected: ${message.data.title}`, 'info', 'leak')
             break
           case 'new_alert':
             queryClient.invalidateQueries({ queryKey: ['alerts'] })
-            showToast(`New alert: ${message.data.title}`, 'warning')
+            throttleToast(`New alert: ${message.data.title}`, 'warning', 'alert')
             break
           case 'scrape_update':
             queryClient.invalidateQueries({ queryKey: ['leaks'] })
@@ -102,8 +111,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setWs(socket)
-  }, [queryClient, showToast])
+    // setWs(socket) - removed state to prevent unnecessary re-renders
+  }, [queryClient, showToast, throttleToast])
 
   useEffect(() => {
     connect()
