@@ -54,11 +54,17 @@ def get_scrape_status():
 
 def update_scrape_status(status_data):
     status_file = os.environ.get("SCRAPE_STATUS_FILE", "/tmp/dwtip_scrape_status.json")
-    if "start_time" not in status_data:
-        status_data["start_time"] = datetime.now().isoformat()
+    try:
+        with open(status_file, "r") as f:
+            existing = json.load(f)
+    except Exception:
+        existing = {}
+    existing.update(status_data)
+    if "start_time" not in existing:
+        existing["start_time"] = datetime.now().isoformat()
     with open(status_file, "w") as f:
-        json.dump(status_data, f)
-    return status_data
+        json.dump(existing, f)
+    return existing
 
 
 @app.task(bind=True, base=DatabaseTask, name="workers.tasks.scrape_url")
@@ -122,12 +128,7 @@ def scrape_url(self, url: str, source_id: int, scrape_config: dict = None):
                 )
 
         leak_keywords = [
-            "breach",
-            "leaked",
-            "database",
-            "ransomware",
-            "stolen",
-            "compromised",
+            "breach", "leaked", "database", "ransomware", "stolen", "compromised",
         ]
         if any(kw in text_content.lower() for kw in leak_keywords):
             title_match = re.search(
@@ -135,9 +136,7 @@ def scrape_url(self, url: str, source_id: int, scrape_config: dict = None):
             )
             result["leaks"].append(
                 {
-                    "title": title_match.group(1)
-                    if title_match
-                    else "Potential Leak Detected",
+                    "title": title_match.group(1) if title_match else "Potential Leak Detected",
                     "source_url": url,
                     "source_id": source_id,
                     "severity": "medium",
@@ -146,10 +145,13 @@ def scrape_url(self, url: str, source_id: int, scrape_config: dict = None):
 
     except requests.exceptions.Timeout:
         result["error"] = "Timeout"
+        logger.warning(f"Timeout scraping {url}")
     except requests.exceptions.ConnectionError:
         result["error"] = "Connection Error"
+        logger.warning(f"Connection error scraping {url}")
     except Exception as e:
         result["error"] = str(e)
+        logger.error(f"Unexpected error scraping {url}: {e}")
 
     return result
 
@@ -202,8 +204,8 @@ def process_scrape_result(self, scrape_result: dict):
             )
             db.add(new_leak)
 
-            alerts = db.query(User).filter(User.role.in_(["admin", "analyst"])).all()
-            for user in alerts:
+            users = db.query(User).filter(User.role.in_(["admin", "analyst"])).all()
+            for user in users:
                 alert = Alert(
                     user_id=user.id,
                     alert_type="new_leak",
@@ -230,27 +232,27 @@ def process_scrape_result(self, scrape_result: dict):
 def scrape_sources(self, limit: int = 50):
     db = SessionLocal()
 
+    start_time = datetime.now().isoformat()
+
     update_scrape_status(
         {
             "status": "running",
             "progress": 0,
-            "total": limit,
+            "total": 0,
             "success": 0,
             "failed": 0,
             "current_url": "Starting scrape...",
-            "logs": [
-                f"[{datetime.now().strftime('%H:%M:%S')}] Starting scheduled scrape..."
-            ],
-            "start_time": datetime.now().isoformat(),
+            "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] Starting scheduled scrape..."],
+            "start_time": start_time,
             "end_time": None,
         }
     )
 
     try:
+        # ✅ سكان على كل السورسز مش بس onion
         sources = (
             db.query(Source)
-            .filter(Source.is_active)
-            .filter((Source.url.like("%.onion%")) | (Source.onion_url.like("%.onion%")))
+            .filter(Source.is_active == True)
             .limit(limit)
             .all()
         )
@@ -273,24 +275,29 @@ def scrape_sources(self, limit: int = 50):
                     "failed": failed,
                     "current_url": url,
                     "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] Scraping {url}"],
-                    "start_time": update_scrape_status({"status": "running"})[
-                        "start_time"
-                    ],
+                    "start_time": start_time,
                     "end_time": None,
                 }
             )
 
-            scrape_result = scrape_url.delay(
-                url, source.id, source.scraping_config or {}
-            )
-
             try:
-                result = scrape_result.get(timeout=60)
+                # ✅ سكان كامل وانتظر النتيجة قبل المتابعة
+                scrape_result = scrape_url.apply_async(
+                    args=[url, source.id, source.scraping_config or {}],
+                    retry=True,
+                    retry_policy={"max_retries": 3, "interval_start": 5}
+                )
+                result = scrape_result.get(timeout=90)
+
                 if result.get("success"):
                     success += 1
+                    # ✅ معالجة الداتا كاملة قبل المتابعة
                     process_scrape_result.delay(result)
+                    logger.info(f"✅ Success: {url} | IOCs: {len(result.get('iocs', []))}")
                 else:
                     failed += 1
+                    logger.warning(f"❌ Failed: {url} | {result.get('error')}")
+
             except Exception as e:
                 logger.error(f"Scrape failed for {url}: {e}")
                 failed += 1
@@ -305,9 +312,8 @@ def scrape_sources(self, limit: int = 50):
                 "success": success,
                 "failed": failed,
                 "current_url": "",
-                "logs": [
-                    f"[{datetime.now().strftime('%H:%M:%S')}] Scrape completed: {success} success, {failed} failed"
-                ],
+                "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] Scrape completed: {success} success, {failed} failed"],
+                "end_time": datetime.now().isoformat(),
             }
         )
 
@@ -317,7 +323,7 @@ def scrape_sources(self, limit: int = 50):
     return {"status": "completed", "success": success, "failed": failed}
 
 
-@app.task(bind=True, base=DatabaseTask, name="workers.tasks.alert_*")
+@app.task(bind=True, base=DatabaseTask, name="workers.tasks.send_alert_email")
 def send_alert_email(self, alert_id: int):
     from backend.core.config import get_settings
     import smtplib
@@ -354,7 +360,7 @@ def send_alert_email(self, alert_id: int):
         <p><strong>Description:</strong></p>
         <p>{alert.description or "No description provided"}</p>
         <hr>
-        <p><small>This alert was generated by DWTIP. <a href="{settings.alert_email}">Manage preferences</a></small></p>
+        <p><small>This alert was generated by DWTIP.</small></p>
         </body>
         </html>
         """
@@ -415,7 +421,7 @@ def cleanup_old_alerts(self, days: int = 90):
 
     old_alerts = (
         db.query(Alert)
-        .filter(Alert.created_at < cutoff, Alert.is_dismissed)
+        .filter(Alert.created_at < cutoff, Alert.is_dismissed == True)
         .all()
     )
 
@@ -429,7 +435,7 @@ def cleanup_old_alerts(self, days: int = 90):
     return {"status": "success", "deleted": count}
 
 
-@app.task(bind=True, name="workers.tasks.process_*")
+@app.task(bind=True, name="workers.tasks.process_ioc_batch")
 def process_ioc_batch(self, ioc_ids: list):
     db = SessionLocal()
 
