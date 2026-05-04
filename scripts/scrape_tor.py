@@ -24,7 +24,8 @@ DEEPDARKCTI_PATH = os.environ.get(
 )
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 API_TOKEN = None
-SOCKS_PROXY = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+tor_proxy = os.environ.get("TOR_PROXY", "socks5h://tor:9050").replace("socks5://", "socks5h://")
+SOCKS_PROXY = {"http": tor_proxy, "https": tor_proxy}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",

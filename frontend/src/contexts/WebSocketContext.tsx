@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode, useRef } from 'react'
 import { useToast } from '../components/Toast'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -26,25 +26,54 @@ export function useWebSocket() {
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
-  const [ws, setWs] = useState<WebSocket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastToastTimeRef = useRef<Record<string, number>>({})
   const { showToast } = useToast()
   const queryClient = useQueryClient()
 
+  const throttleToast = useCallback((message: string, type: string, key: string) => {
+    const now = Date.now()
+    const lastTime = lastToastTimeRef.current[key] || 0
+    if (now - lastTime > 5000) { // 5 seconds throttle
+      showToast(message, type as any)
+      lastToastTimeRef.current[key] = now
+    }
+  }, [showToast])
+
   const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.CONNECTING || wsRef.current?.readyState === WebSocket.OPEN) {
+      return
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`
 
+    console.log('Connecting to WebSocket:', wsUrl)
     const socket = new WebSocket(wsUrl)
+    wsRef.current = socket
 
     socket.onopen = () => {
       setIsConnected(true)
       console.log('WebSocket connected')
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
     }
 
     socket.onclose = () => {
       setIsConnected(false)
+      wsRef.current = null
+      setWs(null)
       console.log('WebSocket disconnected')
-      setTimeout(connect, 5000)
+      
+      if (!reconnectTimeoutRef.current) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null
+          connect()
+        }, 5000)
+      }
     }
 
     socket.onerror = (error) => {
@@ -60,11 +89,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           case 'new_leak':
             queryClient.invalidateQueries({ queryKey: ['leaks'] })
             queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-            showToast(`New leak detected: ${message.data.title}`, 'info')
+            throttleToast(`New leak detected: ${message.data.title}`, 'info', 'leak')
             break
           case 'new_alert':
             queryClient.invalidateQueries({ queryKey: ['alerts'] })
-            showToast(`New alert: ${message.data.title}`, 'warning')
+            throttleToast(`New alert: ${message.data.title}`, 'warning', 'alert')
             break
           case 'scrape_update':
             queryClient.invalidateQueries({ queryKey: ['leaks'] })
@@ -82,24 +111,27 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setWs(socket)
-  }, [queryClient, showToast])
+    // setWs(socket) - removed state to prevent unnecessary re-renders
+  }, [queryClient, showToast, throttleToast])
 
   useEffect(() => {
     connect()
 
     return () => {
-      if (ws) {
-        ws.close()
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
       }
     }
-  }, [connect, ws])
+  }, [connect])
 
   const sendMessage = useCallback((message: string) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(message)
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(message)
     }
-  }, [ws])
+  }, [])
 
   return (
     <WebSocketContext.Provider value={{ isConnected, lastMessage, sendMessage }}>

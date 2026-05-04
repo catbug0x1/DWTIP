@@ -6,6 +6,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
     Request,
+    BackgroundTasks,
 )
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,8 @@ from collections import defaultdict
 from datetime import datetime as dt
 import json
 import re
+import subprocess
+import sys
 
 from backend.core.config import get_settings
 from backend.core.database import (
@@ -140,9 +143,12 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        print(f"[*] WebSocket connected. Total connections: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        print(f"[*] WebSocket disconnected. Total connections: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
@@ -819,18 +825,45 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     }
 
 
+def run_scraper(scraper_path, base_path, stats_file):
+    try:
+        log_file = open("/tmp/scraper.log", "w")
+        proc = subprocess.Popen(
+            [sys.executable, "-u", scraper_path, "800", "5"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=base_path,
+        )
+        proc.wait()
+        log_file.close()
+    except Exception as e:
+        with open(stats_file, "w") as f:
+            json.dump(
+                {
+                    "status": "error",
+                    "error": str(e),
+                    "logs": [f"Error: {e}"],
+                },
+                f,
+            )
+
 @app.post("/api/v1/scrape/trigger")
 async def trigger_scrape(
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    import subprocess
-    import sys
     import os
-    import threading
-
-    base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    scraper_path = os.path.join(base_path, "scripts", "scrape_tor.py")
+    # Get the parent directory of 'api' which is the backend root
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # But scripts is outside backend root? Let's check. 
+    # Structure:
+    # /app/api/main.py
+    # /app/scripts/scrape_tor.py? No, it's in /app/scripts/
+    
+    # Wait, base_path should be /app
+    project_root = "/app"
+    scraper_path = os.path.join(project_root, "scripts", "scrape_tor.py")
     stats_file = "/tmp/dwtip_scrape_status.json"
 
     with open(stats_file, "w") as f:
@@ -849,27 +882,7 @@ async def trigger_scrape(
             f,
         )
 
-    def run_scraper():
-        try:
-            subprocess.Popen(
-                [sys.executable, scraper_path, "800", "5"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=base_path,
-            )
-        except Exception as e:
-            with open(stats_file, "w") as f:
-                json.dump(
-                    {
-                        "status": "error",
-                        "error": str(e),
-                        "logs": [f"Error: {e}"],
-                    },
-                    f,
-                )
-
-    thread = threading.Thread(target=run_scraper)
-    thread.start()
+    background_tasks.add_task(run_scraper, scraper_path, project_root, stats_file)
 
     return {
         "status": "started",

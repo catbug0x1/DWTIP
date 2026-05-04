@@ -51,7 +51,7 @@ class IOC(Base):
     false_positive_rate = Column(Float, default=0.0)
 
     tags = Column(JSON, default=lambda: [])
-    meta_data = Column(JSON, default=lambda: {})
+    meta_data = Column("metadata", JSON, default=lambda: {})
 
     is_whitelisted = Column(Boolean, default=False)
     is_verified = Column(Boolean, default=False)
@@ -83,5 +83,5 @@ class IOCRelation(Base):
     target_ioc_id = Column(Integer, ForeignKey("iocs.id"), nullable=False)
     relationship_type = Column(String(100))
     confidence = Column(Float, default=1.0)
-    meta_data = Column(JSON, default=dict)
+    meta_data = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)

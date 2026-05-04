@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react'
+import { createContext, useContext, useState, ReactNode, useCallback } from 'react'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -19,13 +19,16 @@ let toastId = 0
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const showToast = (message: string, type: ToastType = 'info') => {
+  const showToast = useCallback((message: string, type: ToastType = 'info') => {
     const id = ++toastId
-    setToasts(prev => [...prev, { id, message, type }])
+    setToasts(prev => {
+      const newToasts = [...prev, { id, message, type }]
+      return newToasts.slice(-5) // Keep only the last 5 toasts
+    })
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id))
-    }, 3000)
-  }
+    }, 5000)
+  }, [])
 
   const getToastStyles = (type: ToastType) => {
     switch (type) {
