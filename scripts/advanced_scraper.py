@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScraperConfig:
+    """Scraper configuration"""
 
     api_url: str = os.environ.get("API_URL", "http://localhost:8000")
     api_token: Optional[str] = None
@@ -90,6 +91,7 @@ class ScraperConfig:
 
 @dataclass
 class ScrapeResult:
+    """Result of scraping a URL"""
 
     url: str
     success: bool
@@ -109,6 +111,7 @@ class ScrapeResult:
 
 @dataclass
 class IOC:
+    """Indicator of Compromise"""
 
     type: str
     value: str
@@ -119,6 +122,7 @@ class IOC:
 
 
 class TorManager:
+    """Manages Tor circuit for anonymity"""
 
     def __init__(self, config: ScraperConfig):
         self.config = config
@@ -127,6 +131,7 @@ class TorManager:
         self._lock = threading.Lock()
 
     def connect(self) -> bool:
+        """Connect to Tor control port"""
         if not HAS_STEM:
             logger.warning("Stem library not available. Tor circuit rotation disabled.")
             return False
@@ -150,10 +155,12 @@ class TorManager:
             return False
 
     def _circuit_listener(self, event):
+        """Listen for circuit events"""
         if event.status == EventType.CIRC:
             pass
 
     def rotate_circuit(self) -> bool:
+        """Request a new Tor circuit"""
         with self._lock:
             if not self.controller:
                 return False
@@ -168,10 +175,12 @@ class TorManager:
                 return False
 
     def should_rotate(self) -> bool:
+        """Check if circuit should be rotated"""
         elapsed = time.time() - self.last_circuit_time
         return elapsed >= self.config.circuit_rotate_interval
 
     def close(self):
+        """Close Tor connection"""
         if self.controller:
             try:
                 self.controller.remove_event_listener(self._circuit_listener)
@@ -181,12 +190,14 @@ class TorManager:
 
 
 class SessionManager:
+    """Manages HTTP sessions with Tor"""
 
     def __init__(self, config: ScraperConfig):
         self.config = config
         self.session = self._create_session()
 
     def _create_session(self) -> requests.Session:
+        """Create a new requests session with Tor proxy"""
         session = requests.Session()
 
         session.proxies = {
@@ -223,21 +234,25 @@ class SessionManager:
         return session
 
     def get(self, url: str, **kwargs) -> requests.Response:
+        """Make GET request"""
         kwargs.setdefault("timeout", self.config.request_timeout)
         kwargs.setdefault("verify", False)
         return self.session.get(url, **kwargs)
 
     def post(self, url: str, **kwargs) -> requests.Response:
+        """Make POST request"""
         kwargs.setdefault("timeout", self.config.request_timeout)
         kwargs.setdefault("verify", False)
         return self.session.post(url, **kwargs)
 
     def reset(self):
+        """Reset session (for new circuit)"""
         self.session.close()
         self.session = self._create_session()
 
 
 class IOCExtractor:
+    """Extracts Indicators of Compromise from text"""
 
     PATTERNS = {
         "ipv4": re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"),
@@ -311,6 +326,7 @@ class IOCExtractor:
         self.whitelist = self._load_whitelist()
 
     def _load_whitelist(self) -> set:
+        """Load whitelisted values"""
         return {
             "1.1.1.1",
             "8.8.8.8",
@@ -330,6 +346,7 @@ class IOCExtractor:
         }
 
     def is_whitelisted(self, ioc_type: str, value: str) -> bool:
+        """Check if IOC is whitelisted"""
         if value.lower() in self.whitelist:
             return True
 
@@ -349,6 +366,7 @@ class IOCExtractor:
         return False
 
     def extract(self, text: str, url: str = "") -> List[IOC]:
+        """Extract IOCs from text"""
         iocs = []
         seen = set()
 
@@ -386,6 +404,7 @@ class IOCExtractor:
         return iocs
 
     def _normalize_type(self, pattern_type: str) -> str:
+        """Normalize IOC type names"""
         mapping = {
             "ipv4": "ip",
             "ipv6": "ip",
@@ -400,6 +419,7 @@ class IOCExtractor:
         return mapping.get(pattern_type, pattern_type)
 
     def _calculate_confidence(self, ioc_type: str, value: str, context: str) -> float:
+        """Calculate confidence score"""
         confidence = 0.5
 
         context_lower = context.lower()
@@ -426,6 +446,7 @@ class IOCExtractor:
         return min(1.0, confidence)
 
     def _extract_tags(self, context: str) -> List[str]:
+        """Extract relevant tags from context"""
         tags = []
         context_lower = context.lower()
 
@@ -437,11 +458,13 @@ class IOCExtractor:
 
 
 class ContentExtractor:
+    """Extracts structured content from web pages"""
 
     def __init__(self):
         self.text_cleaner = re.compile(r"\s+")
 
     def extract(self, html: str, url: str) -> Dict[str, Any]:
+        """Extract structured content from HTML"""
         soup = BeautifulSoup(html, "html.parser")
 
         for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -467,6 +490,7 @@ class ContentExtractor:
         }
 
     def _extract_title(self, soup: BeautifulSoup) -> str:
+        """Extract page title"""
         if soup.title:
             return soup.title.string.strip() if soup.title.string else ""
 
@@ -477,6 +501,7 @@ class ContentExtractor:
         return ""
 
     def _extract_main_content(self, soup: BeautifulSoup) -> str:
+        """Extract main content area"""
         article = soup.find("article")
         if article:
             return article.get_text(separator="\n", strip=True)
@@ -498,6 +523,7 @@ class ContentExtractor:
         return ""
 
     def _extract_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract all links from page"""
         links = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -513,6 +539,7 @@ class ContentExtractor:
         return list(set(links))[:100]
 
     def _extract_images(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract all images from page"""
         images = []
         for img in soup.find_all("img", src=True):
             src = img["src"]
@@ -528,6 +555,7 @@ class ContentExtractor:
         return list(set(images))[:50]
 
     def _extract_metadata(self, soup: BeautifulSoup) -> Dict[str, str]:
+        """Extract metadata"""
         metadata = {}
 
         for meta in soup.find_all("meta"):
@@ -539,11 +567,13 @@ class ContentExtractor:
         return metadata
 
     def _clean_text(self, text: str) -> str:
+        """Clean extracted text"""
         text = self.text_cleaner.sub(" ", text)
         return text.strip()
 
 
 class Scraper:
+    """Main scraper class"""
 
     def __init__(self, config: Optional[ScraperConfig] = None):
         self.config = config or ScraperConfig()
@@ -556,6 +586,7 @@ class Scraper:
         self._lock = threading.Lock()
 
     def _load_status(self) -> Dict[str, Any]:
+        """Load scrape status from file"""
         try:
             with open(self.config.status_file, "r") as f:
                 return json.load(f)
@@ -573,10 +604,12 @@ class Scraper:
             }
 
     def _save_status(self):
+        """Save scrape status to file"""
         with open(self.config.status_file, "w") as f:
             json.dump(self.status, f, indent=2)
 
     def _log(self, message: str, level: str = "INFO"):
+        """Log message and update status"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
 
@@ -589,6 +622,7 @@ class Scraper:
             self._save_status()
 
     def authenticate_api(self) -> bool:
+        """Authenticate with the API (direct, no Tor)"""
         try:
             direct_session = requests.Session()
             response = direct_session.post(
@@ -614,6 +648,7 @@ class Scraper:
             return False
 
     def load_onion_urls(self) -> List[Dict[str, Any]]:
+        """Load onion URLs from deepdarkCTI directory"""
         urls = []
         deepdark_path = Path(self.config.deepdarkcti_path)
 
@@ -660,6 +695,7 @@ class Scraper:
         return urls
 
     def _load_from_database(self) -> List[Dict[str, Any]]:
+        """Load URLs from database (direct, no Tor)"""
         if not self.config.api_token:
             self.authenticate_api()
 
@@ -697,6 +733,7 @@ class Scraper:
         return []
 
     def scrape_url(self, url_data: Dict[str, Any]) -> ScrapeResult:
+        """Scrape a single URL"""
         url = url_data.get("url", "")
         start_time = time.time()
 
@@ -757,6 +794,7 @@ class Scraper:
         return result
 
     def _detect_threats(self, text: str, title: str) -> List[Dict[str, Any]]:
+        """Detect potential threats in content"""
         threats = []
         text_lower = text.lower()
         title_lower = title.lower()
@@ -820,6 +858,7 @@ class Scraper:
         return threats
 
     def push_results(self, result: ScrapeResult, category: str = "other"):
+        """Push scrape results to API"""
         if not self.config.api_token:
             self.authenticate_api()
 
@@ -882,6 +921,7 @@ class Scraper:
             self._log(f"Error pushing results: {e}", "ERROR")
 
     def run(self, limit: int = 50, workers: int = None):
+        """Run the scraper"""
         workers = workers or self.config.max_workers
 
         self.tor.connect()
@@ -963,6 +1003,7 @@ class Scraper:
         return self.status
 
     def stop(self):
+        """Stop the scraper"""
         self.status["status"] = "stopped"
         self.status["end_time"] = datetime.now().isoformat()
         self._save_status()
